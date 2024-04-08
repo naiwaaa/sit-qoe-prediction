@@ -1,0 +1,309 @@
+---
+jupyter:
+  jupytext:
+    cell_metadata_json: true
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.3.0
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+<!-- #region {"heading_collapsed": true} -->
+# Import
+<!-- #endregion -->
+
+```{python init_cell=TRUE, hidden=TRUE}
+# %load_ext autoreload
+# %autoreload 2
+# %matplotlib inline
+
+import sys
+
+sys.path.append("..")
+```
+
+```{python init_cell=TRUE, hidden=TRUE}
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sit_qoe import data
+from sit_qoe.utils import visualize_twinx, preprocess
+```
+
+```{python hidden=TRUE}
+
+```
+
+# Utilities Functions
+
+```{python init_cell=TRUE}
+SUPPORTED_DATASETS = ["lfovia", "live_mobile_stall_2", "live_netflix", "live_netflix_2"]
+
+def load_dataset(dataset_index):
+    dataset, dataset_info = data.load(
+        name=SUPPORTED_DATASETS[dataset_index],
+        with_info=True
+    )
+    print(
+        f"{SUPPORTED_DATASETS[dataset_index]} loaded\n"
+        f"Number of video data: {len(dataset)}\n"
+    )
+
+    return dataset, dataset_info
+```
+
+```{python init_cell=TRUE}
+visualize_style = {
+    "bitrate": {"label": "kbps", "color": "tab:cyan"},
+    "qoe_continuous": {
+        "label": "Subjective QoE",
+        "color": "tab:orange",
+        "linestyle": "--",
+    },
+    "qoe_overall": {
+        "label": "Subjective overall QoE",
+        "color": "tab:red",
+        "linestyle": "--",
+    },
+    "stsq": {"label": "STSQ", "color": "tab:purple"},
+    "pi": {"label": "PI", "color": "tab:green"},
+    "nr": {"label": "NR", "color": "tab:brown"},
+    "tr": {"label": "TR", "color": "tab:olive"},
+}
+```
+
+```{python init_cell=TRUE}
+def find_min_max(dataset, get_info):
+    min_idx, min_v = -1, 1000000
+    max_idx, max_v = -1000000, 0
+
+    for idx, video_data in enumerate(dataset):
+        min_curr = np.min(get_info(video_data))
+        max_curr = np.max(get_info(video_data))
+        if max_curr > max_v:
+            max_idx = idx
+            max_v = max_curr
+        if min_curr < min_v:
+            min_idx = idx
+            min_v = min_curr
+    print(f"Min {min_v} at video index {min_idx}")
+    print(f"Max {max_v} at video index {max_idx}")
+```
+
+```{python}
+
+```
+
+# Load QoE Databases
+
+```{python}
+# ["lfovia", "live_mobile_stall_2", "live_netflix", "live_netflix_2"]
+dataset_index = 2  # change the index to switch to other QoE databases
+
+dataset, dataset_info = load_dataset(dataset_index)
+```
+
+```{python}
+
+```
+
+# Visualization
+
+
+Visualize a video data
+
+```{python}
+video_data = dataset[5]
+print(video_data.filename)
+
+fig, axs = plt.subplots(3, 2, figsize=(12, 12))
+fig.subplots_adjust(wspace=0.4, hspace=0.4)
+
+visualize_twinx(
+    axs[0, 0],
+    "frame",
+    video_data.qoe_continuous,
+    visualize_style["qoe_continuous"],
+    video_data.bitrate,
+    visualize_style["bitrate"],
+)
+
+visualize_twinx(
+    axs[0, 1],
+    "frame",
+    video_data.stsq_strred,
+    visualize_style["stsq"],
+    video_data.bitrate,
+    visualize_style["bitrate"],
+)
+
+visualize_twinx(
+    axs[1, 0],
+    "frame",
+    video_data.playback_indicator,
+    visualize_style["pi"],
+    video_data.bitrate,
+    visualize_style["bitrate"],
+)
+
+visualize_twinx(
+    axs[1, 1],
+    "frame",
+    video_data.time_elapsed_since_impairments,
+    visualize_style["tr"],
+    video_data.bitrate,
+    visualize_style["bitrate"],
+)
+
+visualize_twinx(
+    axs[2, 0],
+    "frame",
+    video_data.number_of_rebuff,
+    visualize_style["nr"],
+    video_data.bitrate,
+    visualize_style["bitrate"],
+)
+```
+
+Visualize instantaneous QoE and overall QoE
+
+```{python}
+video_data = dataset[9]
+
+fig, axs = plt.subplots(dpi=500)
+fig.subplots_adjust(wspace=0.4, hspace=0.4)
+
+axs.set_ylabel("QoE")
+axs.set_xlabel("seconds")
+
+axs.plot(
+    video_data.qoe_continuous,
+    color="tab:blue",
+    linestyle="--",
+    label="Instantaneous QoE",
+)
+axs.plot(
+    np.full_like(video_data.qoe_continuous, video_data.qoe_overall),
+    color="tab:red",
+    linestyle="--",
+    label="Overall QoE",
+)
+
+axs.fill_between(
+    range(0, video_data.len_in_sec),
+    video_data.qoe_continuous_CIhigh,
+    video_data.qoe_continuous_CIlow,
+    facecolor="#0F0F0F0F",
+    label="95% CI",
+    interpolate=True,
+)
+
+axs.fill_between(
+    range(0, video_data.len_in_sec),
+    video_data.qoe_continuous.max(),
+    video_data.qoe_continuous_CIhigh.min(),
+    where=video_data.playback_indicator == 1,
+    facecolor="#0F0F0F0F",
+    label="Rebuffering",
+    interpolate=True,
+)
+axs.legend()
+# fig.savefig('qoe_drop.png', bbox_inches='tight', pad_inches=0)
+```
+
+Visualize features
+
+```{python}
+video_data = dataset[5]
+
+f, axs = plt.subplots(figsize=(6, 4), dpi=500)
+
+values = video_data.stsq_strred
+label = "STSQ"
+
+axs.plot(values, label=f"${label}$")
+axs.fill_between(
+    range(0, video_data.len_in_sec),
+    video_data.playback_indicator * values.max(),
+    video_data.playback_indicator * values.min(),
+    facecolor="C1",
+    label="Rebuffering",
+    interpolate=True,
+)
+axs.legend(loc="upper right")
+
+# f.savefig('stsq.png', bbox_inches='tight', pad_inches=0)
+```
+
+Visualize histogram of a feature over all video data
+
+```{python}
+values = np.array([], dtype=np.float32)
+for video_data in dataset:
+    values = np.hstack([values, video_data.stsq_strred])
+
+values.sort()
+
+print(f"Number of values: {values.shape}")
+print(f"Min: {values.min()}")
+print(f"Max: {values.max()}")
+plt.hist(values)
+```
+
+```{python}
+
+```
+
+# Other Information
+
+```{python}
+# print("Video duration:")
+# find_min_max(dataset, lambda video_data: video_data.len_in_sec)
+
+# print()
+
+print("STSQ_STRRED:")
+find_min_max(dataset, lambda video_data: video_data.stsq_strred)
+
+print()
+
+# print("Number of rebuffering:")
+# find_min_max(dataset, lambda video_data: video_data.number_of_rebuff)
+
+
+# print()
+
+# print("Instantaneous QoE:")
+# find_min_max(dataset, lambda video_data: video_data.qoe_continuous)
+
+# print()
+
+# print("Overall QoE:")
+# find_min_max(dataset, lambda video_data: video_data.qoe_overall)
+```
+
+```{python}
+
+```
+
+# Playground
+
+```{python}
+# check if all features are successfully computed
+for video_data in dataset:
+    video_data.stsq_strred
+    video_data.playback_indicator
+    video_data.time_elapsed_since_rebuff
+    video_data.time_elapsed_since_impairments
+    video_data.number_of_rebuff
+```
+
+```{python}
+
+```

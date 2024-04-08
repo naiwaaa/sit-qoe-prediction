@@ -1,0 +1,82 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.1.2
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+```{python init_cell=TRUE}
+# %load_ext autoreload
+# %autoreload 2
+# %matplotlib inline
+
+import sys
+sys.path.append('..')
+```
+
+```{python init_cell=TRUE}
+import math
+
+import pandas
+import numpy as np
+from scipy.stats import pearsonr as pcc
+import matplotlib.pyplot as plt
+
+from qoe_lstm.data import load_datasets
+```
+
+```{python}
+
+```
+
+```{python init_cell=TRUE}
+video_data_list = load_datasets('../datasets', 'lfovia_rv', load_from_cache=False).video_data_list
+```
+
+```{python}
+qoe = []
+doi = []
+data = []
+for ind, video_data in enumerate(video_data_list):
+    qoe.append(video_data.qoe_overall)
+    doi.append(video_data.doi)
+    data.append(["vid_" + str(ind + 1), video_data.qoe_overall, video_data.doi])
+    
+data
+```
+
+```{python}
+fig, axs = plt.subplots(1, figsize=(6, 4), dpi=300)
+axs.plot(doi, qoe, 'o')
+axs.set_ylabel('Overall QoE')
+axs.set_xlabel('Mean of DoI scores')
+fig.savefig('pcc_doi_overallqoe.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python}
+pcc(qoe, doi)
+```
+
+```{python}
+lqoe
+```
+
+```{python}
+len(doi)
+```
+
+```{python}
+
+```
+
+```{python}
+
+```

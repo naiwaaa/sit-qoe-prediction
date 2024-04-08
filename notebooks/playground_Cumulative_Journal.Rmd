@@ -1,0 +1,600 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.1.3
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+# Import
+
+```{python init_cell=TRUE}
+# %load_ext autoreload
+# %autoreload 2
+# %matplotlib inline
+
+import sys
+sys.path.append('..')
+```
+
+```{python init_cell=TRUE}
+import numpy as np
+import math
+from sklearn.model_selection import train_test_split
+from scipy.stats import pearsonr as pcc
+from scipy.stats import spearmanr as srocc
+import matplotlib.pyplot as plt
+
+from qoe_lstm.data import load_datasets
+from qoe_lstm import QoE_LSTM
+```
+
+```{python}
+
+```
+
+# Load LFOVIA dataset
+
+```{python init_cell=TRUE}
+dataset_rv = load_datasets('../datasets', 'lfovia_rv', load_from_cache=False)
+dataset_tv = load_datasets('../datasets', 'lfovia_tv', load_from_cache=False)
+
+rv_video_data_list = dataset_rv.video_data_list
+tv_video_data_list = dataset_tv.video_data_list
+
+rv_train, rv_test = train_test_split(rv_video_data_list, test_size=0.20, random_state=23)
+tv_train, tv_test = train_test_split(tv_video_data_list, test_size=0.20, random_state=23)
+
+print(rv_video_data_list.shape)
+print(tv_video_data_list.shape)
+print(rv_train.shape, rv_test.shape)
+print(tv_train.shape, tv_test.shape)
+```
+
+```{python}
+
+```
+
+# VISUALIZATION
+
+```{python init_cell=TRUE}
+def visualize(axis,
+              x_range,
+              x_label,
+              vec1,
+              vec1_label,
+              vec1_color,
+              vec2=None,
+              vec2_label=None,
+              vec2_color=None):
+    axis.set_xlabel(x_label)
+
+    axis.set_yticks([0, 0.5, 1])
+    axis.set_ylabel(vec1_label, color=vec1_color)
+    axis.plot(x_range, vec1, color=vec1_color)
+
+    if vec2 is not None:
+        second_axis = axis.twinx()
+        second_axis.set_ylabel(vec2_label, color=vec2_color)
+        second_axis.plot(x_range, vec2, color=vec2_color)
+    return axis
+```
+
+```{python init_cell=TRUE}
+kbps_color = 'tab:cyan'
+qoe_color = 'tab:orange'
+stsq_color = 'tab:purple'
+pi_color = 'tab:green'
+tr_color = 'tab:blue'
+```
+
+```{python}
+
+```
+
+# LSTM Model
+
+```{python init_cell=TRUE}
+model = QoE_LSTM()
+model.construct_model(
+    input_shape=(220, 4),
+    units=(32,32),
+    gpu=True)
+model.summary()
+```
+
+```{python}
+X_train, y_train, X_test, y_test = dataset_tv.standard_80_20_split()
+history = model.fit(
+    X_train,
+    y_train,
+    epochs=10000,
+    shuffle=True,
+    batch_size=28,
+    verbose=2,
+    validation_data=(X_test, y_test))
+```
+
+```{python}
+model.evaluate(X_test, y_test, verbose=1)
+
+f, axs = plt.subplots(1, 2, figsize=(12, 6));
+f.subplots_adjust(hspace=0.3);
+
+model.visualize_learning_curves(axs[0])
+
+y_pred = model.predict(X_test)[0, :, 0]
+axs[1].set_title('QoE')
+axs[1].set_xlabel('frame');
+axs[1].set_ylabel('QoE');
+axs[1].plot(y_test[0, :, 0], label='actual');
+axs[1].plot(y_pred, label='predicted');
+
+axs[1].legend(loc='lower right');
+```
+
+```{python}
+# model.save('lfovia_tv_8020.h5')
+model.load('lfovia_tv_8020.h5')
+```
+
+```{python}
+fig, axs = plt.subplots(1, 8, figsize=(22, 4));
+
+idx = 3
+axs_idx = 0
+
+for idx in [0, 1, 2, 3, 4, 5, 6, 7]:
+    video_data = tv_test[idx]
+
+    y_pred = model.predict(video_data.features)[0, :video_data.len_in_sec, 0]
+    
+#     axs[axs_idx].set_title('QoE')
+    axs[axs_idx].set_xlabel('seconds');
+#     axs[0].set_yticks([-1.5, -1, -0.5, 0, 0.5]);
+    axs[axs_idx].set_ylabel('QoE');
+    
+    axs[axs_idx].plot(video_data.qoe_continuous, linestyle='--', label='Subjective QoE');
+    axs[axs_idx].plot(y_pred, label='Predicted QoE');
+
+    axs[axs_idx].fill_between(
+        range(0, video_data.len_in_sec),
+        video_data.qoe_continuous.max(),
+        video_data.qoe_continuous.min(),
+        where=video_data.pi == 1,
+        facecolor='#0F0F0F0F',
+        label='Rebuffering',
+        interpolate=True)
+    handles, labels = axs[axs_idx].get_legend_handles_labels()
+    axs_idx += 1
+
+fig.legend(handles,
+           labels,
+           loc='lower center',
+           fancybox=False,
+           shadow=False,
+           ncol=3)
+
+fig.subplots_adjust(hspace=0.3, wspace=0.24, bottom=0.3)
+
+# fig.savefig('lstm_accuracy.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python}
+fig, axs = plt.subplots(1, 4, figsize=(18, 3), dpi=500);
+
+idx = 3
+axs_idx = 0
+
+for idx in [0, 1, 3, 6]:
+    video_data = tv_test[idx]
+
+    y_pred = model.predict(video_data.features)[0, :video_data.len_in_sec, 0]
+    
+#     axs[axs_idx].set_title('QoE')
+    axs[axs_idx].set_xlabel('seconds');
+#     axs[0].set_yticks([-1.5, -1, -0.5, 0, 0.5]);
+    axs[axs_idx].set_ylabel('QoE');
+    
+    axs[axs_idx].plot(video_data.qoe_continuous, linestyle='--', label='Instantaneous QoE');
+    axs[axs_idx].plot(y_pred, label='Predicted QoE');
+
+    axs[axs_idx].fill_between(
+        range(0, video_data.len_in_sec),
+        video_data.qoe_continuous.max(),
+        video_data.qoe_continuous.min(),
+        where=video_data.pi == 1,
+        facecolor='#0F0F0F0F',
+        label='Rebuffering',
+        interpolate=True)
+    handles, labels = axs[axs_idx].get_legend_handles_labels()
+    axs_idx += 1
+
+fig.legend(handles,
+           labels,
+           loc='lower center',
+           fancybox=False,
+           shadow=False,
+           ncol=3)
+
+fig.subplots_adjust(hspace=0.3, wspace=0.24, bottom=0.3)
+
+fig.savefig('lstm_accuracy.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python}
+
+```
+
+# Cumulative Model
+
+```{python}
+def f_primacy(i, alpha = 0.6807):
+    return math.exp(-alpha * i)
+
+def f_recency(i, t, beta = 0.6807):
+    return math.exp(-beta * (t - i))
+
+
+def priming_function(tr_i, nr_i, gamma=0.3403):
+    return math.exp(-gamma / nr_i * tr_i)
+
+
+def weight(video_data, t):
+    w = np.zeros(t + 1)
+    for i in range(0, t + 1):
+        primacy = f_primacy(i)
+        recency = f_recency(i, t)
+        w[i] += primacy + recency
+
+    for i in range(0, t + 1):
+        if video_data.time_varying_n_rebuff_occurred[i]> 0:
+            priming = priming_function(video_data.tr[i], video_data.time_varying_n_rebuff_occurred[i])
+            w[i] += priming
+    w = w/w.sum()
+    return w
+    
+def cumulative(video_data, t, lambda1=0.9803, lambda2=0.1424, lambda3=0.0968):
+#     qoe = model.predict(video_data.features)[0, :t+1, 0]
+    qoe = video_data.qoe_continuous
+    if t == 0:
+        return qoe[0]
+    
+    past_qoe = qoe[:t]
+    w_past_qoe = weight(video_data, t - 1)
+    past = w_past_qoe @ past_qoe.T
+    return lambda1*past + lambda2*qoe[t] #+ lambda3 * video_data.doi
+
+def cumulative_all(video_data, lambda1=0.9803, lambda2=0.1424, lambda3=0.0968):
+    qoe_cm = []
+    for i in range(0, video_data.len_in_sec):
+        qoe_cm_value = cumulative(video_data, i, lambda1, lambda2, lambda3)
+        qoe_cm.append(qoe_cm_value)
+    return qoe_cm
+```
+
+```{python}
+
+```
+
+<!-- #region {"heading_collapsed": true} -->
+# RV
+<!-- #endregion -->
+
+```{python hidden=TRUE}
+video_data = rv_video_data_list[2]
+w = weight(video_data, 50)
+print(w)
+print(len(w))
+# qoe_cm, w = cumulative_all(video_data)
+# plt.plot(qoe_cm)
+plt.plot(w)
+# plt.plot(video_data.qoe_continuous)
+# plt.plot(np.full_like(video_data.bitrate_values, video_data.qoe_overall))
+```
+
+```{python hidden=TRUE}
+wl1 = []
+wl2 = []
+wl3 = []
+res = []
+
+for video_data in rv_train:
+    t = video_data.len_in_sec - 1
+    
+    past_qoe = video_data.qoe_continuous[:t]
+    w_past_qoe = weight(video_data, t - 1)
+    past = w_past_qoe @ past_qoe.T
+    
+    wl1.append(past)
+    wl2.append(video_data.qoe_continuous[t])
+    wl3.append(video_data.doi)
+    res.append(video_data.qoe_overall)
+```
+
+```{python hidden=TRUE}
+np.array(list(zip(wl1, wl2, wl3, res)))
+```
+
+```{python hidden=TRUE}
+# plt.subplots_adjust(bottom=0, right=0, top=0)
+
+fig, axs = plt.subplots(2, 2, figsize=(16, 10))
+fig.subplots_adjust(hspace=0.3, wspace=0.24)
+
+for i, video_data in enumerate(rv_test):
+    axis = axs[i//2, i % 2]
+    axis.set_title(video_data.filename)
+
+    axis.set_xlabel('seconds')
+    axis.set_ylabel('QoE')
+
+    axis.plot(video_data.qoe_continuous, color='tab:blue', linestyle='--', label='QoE')
+
+    axis.plot(
+        np.full(video_data.len_in_sec, video_data.qoe_overall),
+        color='tab:red', linestyle='--',
+        label='Final QoE')
+    
+    axis2 = axis.twinx()
+    axis2.set_ylabel('kbps')
+
+    axis2.plot(video_data.bitrate_values,
+              color='#0F0F0F5F',
+              label='Bitrate switching')
+    
+#     axis.plot([video_data.qoe_continuous[0:i + 1].mean() for i in range(0, video_data.len_in_sec)],
+#               color='orange',
+#               label='Avg QoE')
+    
+    axis.fill_between(
+        range(0, video_data.len_in_sec),
+        video_data.qoe_continuous.max(),
+        video_data.qoe_continuous.min(),
+        where=video_data.pi == 1,
+        facecolor='#0F0F0F0F',
+        label='Rebuffering',
+        interpolate=True)
+    
+    
+    axis.plot(cumulative_all(video_data),
+              color='tab:green',
+              label='Cumulative QoE')
+        
+        
+    axis.legend(loc='best')
+
+fig.savefig('output.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python hidden=TRUE}
+overall_qoe = []
+cm_qoe = []
+for i, video_data in enumerate(rv_test):
+    overall_qoe.append(video_data.qoe_overall)
+    cm_qoe.append(cumulative(video_data, video_data.len_in_sec - 1))
+```
+
+```{python hidden=TRUE}
+pcc(overall_qoe, cm_qoe)
+```
+
+# TV
+
+```{python}
+fig, axs = plt.subplots(1, 3, figsize=(10, 4), dpi=500);
+
+
+video_data = rv_video_data_list[2]
+w = weight(video_data, video_data.len_in_sec - 1)
+axs[0].plot(w)
+
+video_data = tv_test[6]
+w = weight(video_data, video_data.len_in_sec - 1)
+axs[1].plot(w)
+axs[1].fill_between(
+        range(0, video_data.len_in_sec),
+        w.max(),
+        w.min(),
+        where=video_data.pi == 1,
+        facecolor='#0F0F0F0F',
+        label='Rebuffering',
+        interpolate=True)
+
+# fig.subplots_adjust(hspace=0.3, wspace=0.24, bottom=0.2)
+
+# fig.savefig('weight.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python}
+fig, axs = plt.subplots(dpi=500);
+axs.set_ylabel("Memory weight")
+axs.set_xlabel("seconds")
+video_data = tv_test[6]
+w = weight(video_data, video_data.len_in_sec - 1)
+axs.plot(w)
+axs.set_title("Pattern #6")
+axs.fill_between(
+        range(0, video_data.len_in_sec),
+        w.max(),
+        w.min(),
+        where=video_data.pi == 1,
+        facecolor='#0F0F0F0F',
+        label='Rebuffering',
+        interpolate=True)
+
+# fig.subplots_adjust(hspace=0.3, wspace=0.24, bottom=0.2)
+axs.legend()
+fig.savefig('weight_pattern6.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python}
+wl1
+```
+
+```{python}
+wl1 = []
+wl2 = []
+wl3 = []
+res = []
+
+for video_data in tv_train:
+    t = video_data.len_in_sec - 1
+#     qoe = model.predict(video_data.features)[0, :t+1, 0]
+    qoe = video_data.qoe_continuous
+    
+    past_qoe = qoe[:t]
+    past_qoe = video_data.qoe_continuous[:t]
+    w_past_qoe = weight(video_data, t - 1)
+    past = w_past_qoe @ past_qoe.T
+    
+    wl1.append(past)
+    wl2.append(video_data.qoe_continuous[t])
+    wl3.append(video_data.doi)
+    res.append(video_data.qoe_overall)
+```
+
+```{python}
+np.array(list(zip(wl1, wl2, res)))
+```
+
+```{python}
+
+```
+
+```{python}
+# plt.subplots_adjust(bottom=0, right=0, top=0)
+
+fig, axs = plt.subplots(2, 4, figsize=(22, 8), dpi=500)
+
+for i, video_data in enumerate(tv_test):
+    axis = axs[i//4, i % 4]
+    axis.set_title(f'Pattern #{i}')
+
+    axis.set_xlabel('seconds')
+    axis.set_ylabel('QoE')
+    axis.set_yticks([40, 50, 60, 70, 80, 90])
+
+    axis.set_yticklabels([40, 50, 60, 70, 80, 90])
+
+    axis.plot(video_data.qoe_continuous, color='tab:blue', linestyle='--', label='Subjective QoE')
+
+    axis.plot(
+        np.full(video_data.len_in_sec, video_data.qoe_overall),
+        color='tab:red', linestyle='--',
+        label='Overall QoE')
+    
+#     axis2 = axis.twinx()
+#     axis2.set_ylabel('kbps')
+
+#     axis2.plot(video_data.bitrate_values,
+#               color='#0F0F0F5F',
+#               label='Bitrate switching')
+    
+#     axis.plot([video_data.qoe_continuous[0:i + 1].mean() for i in range(0, video_data.len_in_sec)],
+#               color='orange',
+#               label='Avg QoE')
+    axis.plot(cumulative_all(video_data),
+              color='tab:green',
+              label='Cumulative QoE')   
+    axis.fill_between(
+        range(0, video_data.len_in_sec),
+        video_data.qoe_continuous.max(),
+        video_data.qoe_continuous.min(),
+        where=video_data.pi == 1,
+        facecolor='#0F0F0F0F',
+        label='Rebuffering',
+        interpolate=True)   
+    handles, labels = axis.get_legend_handles_labels()
+
+fig.legend(handles,
+           labels,
+           loc='lower center',
+           fancybox=False,
+           shadow=False,
+           ncol=4)
+
+fig.subplots_adjust(hspace=0.3, wspace=0.2, bottom=0.12)
+fig.savefig('cumulative_performance.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python}
+test_overall_qoe = []
+test_cm_qoe = []
+for i, video_data in enumerate(tv_test):
+    test_overall_qoe.append(video_data.qoe_overall)
+    test_cm_qoe.append(cumulative(video_data, video_data.len_in_sec - 1))
+    
+train_overall_qoe = []
+train_cm_qoe = []
+for i, video_data in enumerate(tv_train):
+    train_overall_qoe.append(video_data.qoe_overall)
+    train_cm_qoe.append(cumulative(video_data, video_data.len_in_sec - 1))
+```
+
+```{python}
+pcc(test_overall_qoe, test_cm_qoe)
+```
+
+```{python}
+srocc(test_overall_qoe, test_cm_qoe)
+```
+
+```{python}
+fig, axs = plt.subplots(1, figsize=(6, 4), dpi=300)
+plt.plot(test_cm_qoe, test_overall_qoe, 'o', label='Test video', markerfacecolor='none')
+plt.plot(train_cm_qoe, train_overall_qoe, 'o', label='Train video', markerfacecolor='none')
+
+axs.set_ylabel('Overall QoE')
+axs.set_xlabel('Cumulative QoE at the end of a session')
+
+axs.legend()
+fig.savefig('pcc_cmqoe_overallqoe.png', bbox_inches='tight', pad_inches=0)
+```
+
+# Playground
+
+```{python}
+fig, axs = plt.subplots(dpi=500);
+
+axs.set_ylabel("Primacy and recency intensity")
+axs.set_xlabel("seconds")
+
+video_data = rv_video_data_list[2]
+w = weight(video_data, video_data.len_in_sec - 1)
+axs.plot(w)
+
+fig.savefig('weight_ideal.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python}
+fig, axs = plt.subplots(dpi=500);
+
+axs.set_ylabel("Memory weight")
+axs.set_xlabel("sTime (seconds)")
+
+video_data = tv_video_data_list[2]
+w = weight(video_data, video_data.len_in_sec - 1)
+axs.plot(w)
+axs.fill_between(
+        range(0, video_data.len_in_sec),
+        w.max(),
+        w.min(),
+        where=video_data.pi == 1,
+        facecolor='#0F0F0F0F',
+        label='Rebuffering',
+        interpolate=True)
+axs.legend()
+fig.savefig('weight_rebuff.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python}
+
+```

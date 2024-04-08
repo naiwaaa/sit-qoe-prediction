@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "sit_qoe"
+version = "0.1.0"
+description = ""
+authors = ["Tho Nguyen Duc <ndtho8205@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.6"
+h5py = "*"
+numpy = "*"
+scikit-learn = "*"
+scipy = "*"
+pandas = "*"
+matplotlib = "*"
+jupyter = "*"
+jupyter-contrib-nbextensions = "*"
+tensorflow = "==1.13.1"
+keras = "==2.2.5"
+seaborn = "^0.9.0"
+
+[tool.poetry.dev-dependencies]
+flake8 = "*"
+flake8-docstrings = "*"
+flake8-rst-docstrings = "*"
+pylint = "*"
+black = "==19.3b0"
+pre-commit = "*"
+jupytext = "*"
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"

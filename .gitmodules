@@ -1,0 +1,3 @@
+[submodule "scripts/keras_to_tensorflow"]
+	path = scripts/keras_to_tensorflow
+	url = https://github.com/amir-abdi/keras_to_tensorflow.git

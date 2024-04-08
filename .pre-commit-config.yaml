@@ -1,0 +1,13 @@
+repos:
+  - repo: https://github.com/python/black
+    rev: 19.3b0
+    hooks:
+      - id: black
+        language_version: python3.6
+        exclude: ^android_app/
+  - repo: https://gitlab.com/pycqa/flake8
+    rev: 3.7.8
+    hooks:
+      - id: flake8
+        exclude: ^android_app/
+        additional_dependencies: [ 'pydocstyle==3.0.0', 'flake8-docstrings', 'flake8-rst-docstrings']

@@ -1,0 +1,313 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.1.7
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+# Import
+
+```{python}
+# %load_ext autoreload
+# %autoreload 2
+# %matplotlib inline
+
+import sys
+sys.path.append('..')
+```
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+
+from qoe_lstm.data import load_datasets, generate_timeseries
+from qoe_lstm.utils import visualize_qoe_predicted
+from qoe_lstm import QoE_LSTM, QoE_BidirectionalLSTM
+```
+
+```{python}
+from keras import backend as K
+K.tensorflow_backend._get_available_gpus()
+```
+
+```{python}
+
+```
+
+# Load dataset
+
+```{python}
+dataset_name = "live_netflix"
+maxlen = 2200
+train_test_sets = (
+    load_datasets("../datasets", "live_netflix", load_from_cache=False)
+    .pattern_split("live_netflix")
+)
+
+len(train_test_sets)
+```
+
+```{python}
+dataset_name = "lfovia"
+maxlen = 220
+train_test_sets = (
+    load_datasets("../datasets", "lfovia", load_from_cache=False)
+    .filter(lambda video_data: video_data.filename.startswith("TV"))
+    .pattern_split("lfovia")
+)
+
+len(train_test_sets)
+```
+
+```{python}
+dataset_name = "live_mobile_stall_2"
+maxlen = 140
+train_test_sets = (
+    load_datasets("../datasets", "live_mobile_stall_2", load_from_cache=False)
+    .random_split(random_state=23)
+)
+
+len(train_test_sets)
+```
+
+```{python}
+generate_timeseries(train_test_sets, maxlen)
+```
+
+```{python}
+
+```
+
+```{python}
+dataset_name = "live_netflix_2"
+maxlen = 1070
+```
+
+```{python}
+dataset_name = "live_mobile_stall_2"
+maxlen = 140
+```
+
+```{python}
+train_val, test = (
+    load_datasets("../datasets", dataset_name, load_from_cache=False)
+    .ratio_split(random_state=23)
+)
+
+train, val = train_val.ratio_split(random_state=23)
+
+len(train), len(test), len(val)
+```
+
+```{python}
+train.generate_timeseries(maxlen)
+test.generate_timeseries(maxlen)
+val.generate_timeseries(maxlen)
+```
+
+# Model
+
+
+## LSTM
+
+```{python}
+model = QoE_LSTM()
+```
+
+## Bidirectional LSTM
+
+```{python}
+model = QoE_BidirectionalLSTM()
+```
+
+<!-- #region {"heading_collapsed": true} -->
+## Attention
+<!-- #endregion -->
+
+```{python hidden=TRUE}
+model = QoE_AttentionLSTM()
+```
+
+## Construct model
+
+```{python}
+model.construct_model(
+    input_shape=(maxlen, 4),
+    units=(22, 22),
+    gpu=False)
+model.summary()
+```
+
+# Evaluate
+
+
+## Train-test split - 1 samples
+
+```{python}
+idx = 2
+train, test, val = train_test_sets[idx]
+
+print(len(train), len(test), len(val))
+print(train.X.shape, test.X.shape, val.X.shape)
+print(train.y.shape, test.y.shape, val.y.shape)
+# (
+#     train.map(lambda vd: vd.filename),
+#     test.map(lambda vd: vd.filename),
+#     val.map(lambda vd: vd.filename),
+# )
+```
+
+```{python}
+history = model.fit(
+    train.X,
+    train.y,
+    epochs=2000,
+    shuffle=True,
+    batch_size=None,
+    verbose=2,
+    validation_data=(val.X, val.y))
+```
+
+```{python}
+model.evaluate(test, verbose=1, OR=True)
+
+f, axs = plt.subplots(1, 2, figsize=(12, 6))
+f.subplots_adjust(hspace=0.3)
+
+model.visualize_learning_curves(axs[0])
+
+visualize_qoe_predicted(
+    axs[1], test.y, model.predict(test.X), test_video=test[0], legend=True
+)
+```
+
+```{python}
+
+```
+
+<!-- #region {"heading_collapsed": true} -->
+## Train-test split - All dataset
+<!-- #endregion -->
+
+```{python hidden=TRUE}
+results = []
+len_train_test_sets = len(train_test_sets)
+
+for idx in range(0, len_train_test_sets):
+    sys.stdout.write(f'\r{idx + 1}/{len(train_test_sets)}')
+
+    train, test, val = train_test_sets[idx]
+
+    model.fit(
+        train.X,
+        train.y,
+        epochs=100,
+        shuffle=True,
+        batch_size=None,
+        verbose=0,
+        validation_data=(val.X, val.y)
+    )
+    
+    results.append(model.evaluate(test.X, test.y, verbose=0))
+```
+
+```{python hidden=TRUE}
+loss = [result['loss'] for result in results]
+srocc = [result['srocc'] for result in results]
+lcc = [result['lcc'] for result in results]
+rmse = [result['rmse'] for result in results]
+
+print(f'Loss:\t{np.mean(loss)} ± {np.std(loss)}')
+print(f'SROCC:\t{np.mean(srocc)} ± {np.std(srocc)}')
+print(f'LCC:\t{np.mean(lcc)} ± {np.std(lcc)}')
+print(f'RMSE:\t{np.mean(rmse)} ± {np.std(rmse)}')
+```
+
+```{python hidden=TRUE}
+# test_indexes = range(0, len_train_test_sets - 26)
+test_indexes = range(0, 8)
+
+n_rows = np.ceil(len(test_indexes) / 4).astype("int")
+n_cols = 4
+
+fig, axs = plt.subplots(n_rows, n_cols, figsize=(18, 6))
+f.subplots_adjust(hspace=0.3, wspace=0.3)
+
+for idx in test_indexes:
+    _, test, _ = train_test_sets[idx]
+    model.load(f"saved_models/traintestsplit_{dataset_name}_{idx}_{test[0].filename}.h5")
+    
+    axis = axs[idx % 4] if n_rows == 1 else axs[idx // 4, idx % 4]
+    visualize_qoe_predicted(
+        axis,
+        test.y,
+        model.predict(test.X),
+        test_video=test[0],
+        legend=True,
+    )
+
+# fig.savefig('lstm_accuracy.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python hidden=TRUE}
+
+```
+
+## 80/20 split
+
+```{python}
+model.fit(
+    train.X,
+    train.y,
+    epochs=1000,
+    shuffle=True,
+    batch_size=None,
+    verbose=2,
+    validation_data=(val.X, val.y)
+)
+```
+
+```{python}
+model.evaluate(test.X, test.y)
+```
+
+```{python}
+
+```
+
+# Playground
+
+```{python}
+import tensorflow as tf
+import keras.backend as K
+
+def get_flops(model):
+    run_meta = tf.RunMetadata()
+    opts = tf.profiler.ProfileOptionBuilder.float_operation()
+
+    # We use the Keras session graph in the call to the profiler.
+    flops = tf.profiler.profile(graph=K.get_session().graph,
+                                run_meta=run_meta, cmd='op', options=opts)
+
+    return flops.total_float_ops  # Prints the "flops" of the model.
+```
+
+```{python}
+get_flops(model)
+```
+
+```{python}
+# %timeit model.predict(test.X)
+```
+
+```{python}
+
+```

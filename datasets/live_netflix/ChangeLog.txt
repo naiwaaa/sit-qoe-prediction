@@ -1,0 +1,3 @@
+Current Version: 2
+Date of Current Version: April 18
+Changes between current and previous version: frame rate for 4 contents was not recorded properly. This is now fixed.

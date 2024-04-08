@@ -1,0 +1,746 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.2.4
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+<!-- #region {"pycharm": {}} -->
+# Import
+<!-- #endregion -->
+
+```{python pycharm={'is_executing': False}, init_cell=TRUE}
+# %load_ext autoreload
+# %autoreload 2
+# %matplotlib inline
+```
+
+```{python pycharm={'is_executing': False}, init_cell=TRUE}
+import sys
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from keras.models import load_model
+
+from sit_qoe import data
+from sit_qoe.data import splits, generate_timeseries
+from sit_qoe.utils import visualize_qoe_predicted, metrics
+from sit_qoe.models import QoE_Wavenet
+```
+
+```{python pycharm={}, init_cell=TRUE}
+from keras import backend as K
+
+K.tensorflow_backend._get_available_gpus()
+```
+
+```{python}
+
+```
+
+<!-- #region {"heading_collapsed": true} -->
+# Utilities Functions
+<!-- #endregion -->
+
+```{python init_cell=TRUE, hidden=TRUE}
+SUPPORTED_DATASETS = ["lfovia", "live_mobile_stall_2", "live_netflix", "live_netflix_2"]
+```
+
+```{python init_cell=TRUE, hidden=TRUE}
+def isNaN(x):
+    return (x is np.nan or x != x)
+```
+
+```{python init_cell=TRUE, hidden=TRUE}
+def load_and_split_by_8020(dataset_index):
+    (train, val, test), dataset_info = data.load(
+        name=SUPPORTED_DATASETS[dataset_index],
+        split=splits.TrainTestValRatioSplit(ratio=[0.8, 0.8], shuffle=False, random_state=23),
+        with_info=True
+    )
+    print(
+        f"{SUPPORTED_DATASETS[dataset_index]} loaded\n"
+        f"Number of video data:\n"
+        f"  train: {len(train)}\n"
+        f"  test: {len(test)}\n"
+        f"  val: {len(val)}\n"
+    )
+    return [[train, test, val]], dataset_info
+```
+
+```{python init_cell=TRUE, hidden=TRUE}
+def load_and_split_by_pattern(dataset_index):
+    dataset_split = None
+    if dataset_index in [0, 2]:
+        dataset_split = splits.TrainTestValPatternSplit(dataset_name=SUPPORTED_DATASETS[dataset_index])
+    elif dataset_index == 1:
+        dataset_split = splits.TrainTestValRandomSplit(random_state=23)
+    elif dataset_index == 3:
+        raise ValueError("live_netflix_2 pattern_split is not implemented.")
+
+    dataset, dataset_info = data.load(
+        name=SUPPORTED_DATASETS[dataset_index],
+        split=dataset_split,
+        with_info=True
+    )
+    print(
+        f"{SUPPORTED_DATASETS[dataset_index]} loaded\n"
+        f"Number of train-test-val sets: {len(dataset)}\n"
+        f"Number of video data in each set:\n"
+        f"  train: {len(dataset[0][0])}\n"
+        f"  test: {len(dataset[0][1])}\n"
+        f"  val: {len(dataset[0][2])}\n"
+    )
+
+    return dataset, dataset_info
+```
+
+```{python hidden=TRUE}
+
+```
+
+<!-- #region {"pycharm": {}, "heading_collapsed": true} -->
+# Load dataset
+<!-- #endregion -->
+
+<!-- #region {"hidden": true} -->
+Pattern split
+<!-- #endregion -->
+
+```{python init_cell=TRUE, hidden=TRUE}
+# ["lfovia", "live_mobile_stall_2", "live_netflix", "live_netflix_2"]
+dataset_index = 1
+# change the index to switch to other QoE databases
+
+train_test_sets, dataset_info = load_and_split_by_pattern(dataset_index)
+dataset_info
+```
+
+<!-- #region {"hidden": true} -->
+80/20 split
+<!-- #endregion -->
+
+```{python hidden=TRUE}
+# ["lfovia", "live_mobile_stall_2", "live_netflix", "live_netflix_2"]
+dataset_index = 0  # change the index to switch to other QoE databases
+
+train_test_sets, dataset_info = load_and_split_by_8020(dataset_index)
+dataset_info
+```
+
+<!-- #region {"hidden": true} -->
+Generate timeseries
+<!-- #endregion -->
+
+```{python init_cell=TRUE, hidden=TRUE}
+split=(8, 1)
+[
+    generate_timeseries(train, dataset_info, normalize=True, split=split, split_method='less')
+    for (train, test, val) in train_test_sets
+]
+[
+    generate_timeseries(val, dataset_info, normalize=True, split=split, split_method='more')
+    for (train, test, val) in train_test_sets
+]
+[
+    generate_timeseries(test, dataset_info, normalize=True, split=split, split_method='more')
+    for (train, test, val) in train_test_sets
+]
+
+print(f"Train shape: \n{train_test_sets[0][0].X.shape, train_test_sets[0][0].y.shape}")
+print(f"Test shape: \n{train_test_sets[0][1].X.shape, train_test_sets[0][1].y.shape}")
+print(f"Val shape: \n{train_test_sets[0][2].X.shape, train_test_sets[0][2].y.shape}")
+```
+
+```{python hidden=TRUE}
+# maxlen = dataset_info["data_range"]["duration"][1]
+split=(8, 1)
+generate_timeseries(train_test_sets, dataset_info, normalize=True, split=split)
+
+print(f"Train shape: \n{train_test_sets[0][0].X.shape, train_test_sets[0][0].y.shape}")
+print(f"Test shape: \n{train_test_sets[0][1].X.shape, train_test_sets[0][1].y.shape}")
+print(f"Val shape: \n{train_test_sets[0][2].X.shape, train_test_sets[0][2].y.shape}")
+```
+
+```{python hidden=TRUE}
+
+```
+
+<!-- #region {"pycharm": {}} -->
+# Model
+<!-- #endregion -->
+
+```{python pycharm={}, init_cell=TRUE}
+def network_init(filters, split, summary=False):
+    model = QoE_Wavenet(
+        batch_size=None,
+        timesteps=split[0],
+        input_dim=3,
+        filters=filters,
+        kernel_size=2,
+        dilation_rates=[1, 2, 4],
+        kernel_initializer="glorot_uniform",
+        return_sequences=False,
+        learning_rate=0.001,
+    )
+    
+    if summary:
+        print(model.summary())
+    
+    return model
+
+model = network_init(32, split=split, summary=True)
+```
+
+```{python}
+
+```
+
+<!-- #region {"pycharm": {}} -->
+# Evaluate
+<!-- #endregion -->
+
+<!-- #region {"pycharm": {}, "heading_collapsed": true} -->
+## Train-test split - 1 samples
+<!-- #endregion -->
+
+```{python hidden=TRUE}
+idx = 1
+train, test, val = train_test_sets[idx]
+
+print(len(train), len(test), len(val))
+print(train.X.shape, test.X.shape, val.X.shape)
+print(train.y.shape, test.y.shape, val.y.shape)
+# (
+#     train.map(lambda vd: vd.filename),
+#     test.map(lambda vd: vd.filename),
+#     val.map(lambda vd: vd.filename),
+# )
+```
+
+```{python pycharm={}, hidden=TRUE}
+model.fit(
+    train.X,
+    train.y,
+    epochs=300,
+    shuffle=True,
+    batch_size=None,
+    verbose=2,
+    validation_data=(val.X, val.y),
+)
+```
+
+```{python hidden=TRUE}
+def wrapper():
+    def wrapped():
+        model.predict(test.X[0:1, :, :])
+    return wrapped
+        
+func = wrapper()
+
+import timeit
+
+print(timeit.timeit(func, number=1000))
+```
+
+```{python hidden=TRUE}
+# model.evaluate(test, verbose=1)
+# %timeit model.predict(test.X[0:1, :, :])
+# # %timeit fit()
+```
+
+```{python pycharm={}, hidden=TRUE}
+model.evaluate(test, verbose=1)
+
+f, axs = plt.subplots(1, 2, figsize=(12, 6))
+f.subplots_adjust(hspace=0.3)
+
+model.visualize_learning_curves(axs[0])
+
+visualize_qoe_predicted(
+    axs[1],
+    test.y.flatten(),
+    model.predict(test.X).flatten(),
+    test_video=test[0],
+    legend=True,
+    rebuff=False,
+    tosec=False,
+)
+axs[1].set_ylim([0, 1])
+```
+
+```{python hidden=TRUE}
+model.predict(train.X[0:5, :, :])
+```
+
+<!-- #region {"heading_collapsed": true} -->
+## Parameters selection
+<!-- #endregion -->
+
+```{python hidden=TRUE}
+grid_results = {}
+
+for n_filters in [4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68]:
+    results = []
+
+    len_train_test_sets = len(train_test_sets)
+    
+    model = network_init(n_filters, batch_size=None, split=split)
+
+    for idx in range(0, len_train_test_sets):
+        sys.stdout.write(f"\r{idx + 1}/{len_train_test_sets}")
+
+        train, test, val = train_test_sets[idx]
+        
+        model.fit(
+            train.X,
+            train.y,
+            epochs=200,
+            shuffle=True,
+            batch_size=125,
+            verbose=0,
+            validation_data=(val.X, val.y),
+        )
+
+        results.append(model.evaluate(test, verbose=0))
+        
+    loss = np.mean([result["loss"] for result in results])
+    srocc = np.mean([result["srocc"] for result in results])
+    lcc = np.mean([result["pcc"] for result in results])
+    rmse = np.mean([result["rmse"] for result in results])
+    
+    grid_results[n_filters] = {
+        "loss": loss,
+        "srocc": srocc,
+        "lcc": lcc,
+        "rmse": rmse,
+    }
+```
+
+```{python hidden=TRUE}
+print(grid_results)
+
+# import json
+
+# json = json.dumps(grid_results)
+# f = open("grid_results_r8_nD2_selu.json","w")
+# f.write(json)
+# f.close()
+```
+
+```{python hidden=TRUE}
+plt.ylim([0, 0.8])
+plt.plot([k for (k, v) in grid_results.items()],
+        [v['srocc'] for (k, v) in grid_results.items()])
+plt.plot([k for (k, v) in grid_results.items()],
+        [v['lcc'] for (k, v) in grid_results.items()])
+plt.plot([k for (k, v) in grid_results.items()],
+        [v['rmse'] for (k, v) in grid_results.items()])
+```
+
+```{python hidden=TRUE}
+
+```
+
+```{python hidden=TRUE}
+
+```
+
+## Train-test split - All dataset
+
+```{python}
+results = []
+len_train_test_sets = len(train_test_sets)
+
+for idx in range(0, len_train_test_sets):
+    sys.stdout.write(f"\r{idx + 1}/{len_train_test_sets}")
+
+    train, test, val = train_test_sets[idx]
+    
+    model = network_init(32, split=split)
+    
+    if os.path.exists(f"saved_models/traintestsplit_{dataset_info['id']}_{idx}_{test[0].filename}.h5"):
+        model.load(f"saved_models/traintestsplit_{dataset_info['id']}_{idx}_{test[0].filename}.h5")
+    else:
+        model.fit(
+            train.X,
+            train.y,
+            epochs=200,
+            shuffle=True,
+            batch_size=None,
+            verbose=0,
+            validation_data=(val.X, val.y),
+        )
+        model.save(
+            f"saved_models/traintestsplit_{dataset_info['id']}_{idx}_{test[0].filename}.h5"
+        )
+        break
+    results.append(model.evaluate(test, verbose=1))
+
+    
+#     model.load(
+#         f"saved_models/traintestsplit_{dataset_info['id']}_{idx}_{test[0].filename}.h5"
+#     )
+```
+
+```{python}
+results
+```
+
+```{python}
+loss = [result["loss"] for result in results]
+srocc = [result["srocc"] for result in results]
+lcc = [result["pcc"] for result in results]
+rmse = [result["rmse"] for result in results]
+
+print(f"Loss:\t{np.mean(loss)} ± {np.std(loss)}")
+print(f"SROCC:\t{np.nanmean(srocc)} ± {np.std(srocc)}")
+print(f"LCC:\t{np.nanmean(lcc)} ± {np.std(lcc)}")
+print(f"RMSE:\t{np.mean(rmse)} ± {np.std(rmse)}")
+```
+
+```{python}
+test_indexes = np.argsort(rmse)[:4]
+test_indexes
+```
+
+```{python}
+rmse
+```
+
+```{python}
+np.argsort(rmse)
+```
+
+```{python}
+# test_indexes = range(0, len_train_test_sets - 26)
+# test_indexes = np.argsort(rmse)[:4]  # range(0, 8)
+test_indexes = [12, 112, 57, 90]
+
+n_rows = np.ceil(len(test_indexes) / 4).astype("int")
+n_cols = 4
+
+fig, axs = plt.subplots(n_rows, n_cols, figsize=(18, 3), dpi=300)
+
+for i, idx in enumerate(test_indexes):
+    _, test, _ = train_test_sets[idx]
+    model.load(
+        f"saved_models/traintestsplit_{dataset_info['id']}_{idx}_{test[0].filename}.h5"
+    )
+
+    axis = axs[i % 4] if n_rows == 1 else axs[i // 4, i % 4]
+    axis.set_ylim([0, 100])
+    axis.set_yticks([0, 20, 40, 60, 80, 100])
+    visualize_qoe_predicted(
+        axis,
+        test.y.flatten()*100,
+        model.predict(test.X).flatten()*100,
+        legend=False,
+#         tosec=True,
+        test_video=test[0],
+        rebuff=False,
+        ci=True
+    )
+    handles, labels = axis.get_legend_handles_labels()
+
+fig.legend(handles, labels, loc="lower center", fancybox=False, shadow=False, ncol=3)
+fig.subplots_adjust(hspace=0.5, wspace=0.3, bottom=0.3)
+fig.savefig(f"result_{dataset_info['id']}.png", bbox_inches="tight", pad_inches=0)
+```
+
+```{python}
+
+```
+
+<!-- #region {"heading_collapsed": true} -->
+## 80/20 split
+<!-- #endregion -->
+
+```{python hidden=TRUE}
+train, test, val = train_test_sets[0]
+```
+
+```{python hidden=TRUE}
+model = network_init(32, batch_size=None, split=split)
+
+model.fit(
+    train.X,
+    train.y,
+    epochs=1000,
+    shuffle=True,
+    batch_size=None,
+    verbose=2,
+    validation_data=(val.X, val.y),
+)
+
+model.save(f"saved_models/8020split_{dataset_info['id']}.h5")
+```
+
+```{python hidden=TRUE}
+model.evaluate(test)
+```
+
+```{python hidden=TRUE}
+model.evaluate()
+```
+
+```{python hidden=TRUE}
+# test_indexes = range(0, len_train_test_sets - 26)
+test_indexes = range(0, 8)
+
+n_rows = np.ceil(len(test_indexes) / 4).astype("int")
+n_cols = 4
+
+fig, axs = plt.subplots(n_rows, n_cols, figsize=(18, 6), dpi=300)
+
+for idx in test_indexes:
+    axis = axs[idx % 4] if n_rows == 1 else axs[idx // 4, idx % 4]
+    visualize_qoe_predicted(
+        axis,
+        test.y[idx : idx + 1],
+        model.predict(test.X[idx : idx + 1]),
+        test_video=test[idx],
+        legend=False,
+    )
+    handles, labels = axis.get_legend_handles_labels()
+
+fig.legend(handles, labels, loc="lower center", fancybox=False, shadow=False, ncol=3)
+fig.subplots_adjust(hspace=0.4, wspace=0.24, bottom=0.17)
+fig.savefig(f"result_{dataset_name}_8020.png", bbox_inches="tight", pad_inches=0)
+```
+
+```{python hidden=TRUE}
+
+```
+
+<!-- #region {"heading_collapsed": true} -->
+# Playground
+<!-- #endregion -->
+
+```{python pycharm={}, hidden=TRUE}
+fig, axs = plt.subplots(2, 4, figsize=(22, 8))
+# fig.subplots_adjust(hspace=0.3, wspace=0.24)
+
+for i in range(test.y.shape[0]):
+    y_pred = model.predict(test.X[i : i + 1])[0, :, 0]
+    axis = axs[i // 4, i % 4]
+    axis.set_title("QoE")
+    axis.set_xlabel("Frame")
+    axis.set_ylabel("QoE")
+    axis.plot(
+        test.y[i, : test_set[i].len_in_sec, 0], linestyle="--", label="Subjective QoE"
+    )
+    axis.plot(y_pred[: test_set[i].len_in_sec], label="Predicted QoE")
+    axis.fill_between(
+        range(0, test_set[i].len_in_sec),
+        test_set[i].qoe_continuous.max(),
+        test_set[i].qoe_continuous.min(),
+        where=test_set[i].playback_indicator == 1,
+        facecolor="#0F0F0F1F",
+        label="Rebuffering",
+        interpolate=True,
+    )
+    handles, labels = axis.get_legend_handles_labels()
+
+fig.legend(handles, labels, loc="lower center", fancybox=False, shadow=False, ncol=4)
+
+fig.subplots_adjust(hspace=0.3, wspace=0.2, bottom=0.12)
+
+# fig.savefig('output1.png', bbox_inches='tight', pad_inches=0)
+```
+
+```{python pycharm={}, hidden=TRUE}
+f, axs = plt.subplots(2, 4, figsize=(15, 7), dpi=500)
+
+for i in range(0, 8):
+    axs[i // 4, i % 4].set_title(
+        f"Pattern #{i} {'(no rebuffering)' if i in [0, 2, 4, 7] else ''}"
+    )
+    axs[i // 4, i % 4].set_xlabel("Frame")
+    axs[i // 4, i % 4].set_ylabel("QoE")
+    axs[i // 4, i % 4].set_ylim([-2, 2])
+    axs[i // 4, i % 4].set_yticks([-2, -1, 0, 1, 2])
+    axs[i // 4, i % 4].plot(
+        y_result[i][0][: dataset[i].n_frames], label="Subjective QoE"
+    )
+    #     axs[i // 4, i % 4].fill_between(
+    #         range(0, dataset[i].n_frames),
+    #         y_result[i][0][:dataset[i].n_frames]*0.95,
+    #         y_result[i][0][:dataset[i].n_frames]*1.05,
+    #         color='blue',
+    #         alpha=0.3,
+    #         label='95% CI')
+    axs[i // 4, i % 4].plot(
+        y_result[i][1][: dataset[i].n_frames], "--", label="Predicted"
+    )
+    axs[i // 4, i % 4].legend()
+
+f.subplots_adjust(hspace=0.3)
+f.savefig("result.png", bbox_inches="tight", pad_inches=0)
+```
+
+```{python pycharm={}, hidden=TRUE}
+
+```
+
+<!-- #region {"hidden": true} -->
+## Write file
+<!-- #endregion -->
+
+```{python hidden=TRUE}
+
+```
+
+```{python hidden=TRUE}
+train_test_sets[0][1].X.flatten().shape
+```
+
+```{python hidden=TRUE}
+train_test_sets[0][1].X.shape
+```
+
+```{python hidden=TRUE}
+results = []
+len_train_test_sets = len(train_test_sets)
+
+for idx in range(len_train_test_sets):
+    sys.stdout.write(f"\r{idx + 1}/{len_train_test_sets}")
+
+    train, test, val = train_test_sets[idx]
+    np.savetxt(f"mobile/testX_{idx}_{test.X.shape[0]}_{test.X.shape[1]}_{test.X.shape[2]}.txt", test.X.flatten(), delimiter="\n")
+    np.savetxt(f"mobile/testY_{idx}.txt", test.y.flatten(), delimiter="\n")
+```
+
+```{python hidden=TRUE}
+from scipy.stats import pearsonr, spearmanr
+from sklearn.metrics import mean_squared_error
+from math import sqrt
+
+LCC_test = []
+SROCC_test = []
+RMSE_test = []
+for test_video_no in range(1, 11):
+    pred_QoE = np.loadtxt(f"output_{test_video_no}.txt")[-train_test_sets[test_video_no][1][0].len_in_sec:]
+    actual_QoE = np.loadtxt(f"testY_{test_video_no}.txt")[-train_test_sets[test_video_no][1][0].len_in_sec:]
+
+    LCC_test.append(pearsonr(pred_QoE, actual_QoE))
+    SROCC_test.append(spearmanr(pred_QoE, actual_QoE)[0])
+    RMSE_test.append(sqrt(mean_squared_error(pred_QoE, actual_QoE)))
+
+print(np.mean(LCC_test))
+print(np.mean(SROCC_test))
+print(np.mean(RMSE_test))
+```
+
+```{python hidden=TRUE}
+train_test_sets[test_video_no][1][0].len_in_sec
+```
+
+```{python hidden=TRUE}
+pred_tcn = np.loadtxt("./output_tcn.txt")
+pred_qoecnn = np.loadtxt("./output_qoecnn.txt")
+actual = np.loadtxt("./testY_0.txt")
+from sit_qoe.utils import metrics
+
+print(metrics.PCC(actual, pred_tcn), metrics.SROCC(actual, pred_tcn), metrics.RMSE(actual, pred_tcn))
+print(metrics.PCC(actual, pred_qoecnn), metrics.SROCC(actual, pred_qoecnn), metrics.RMSE(actual, pred_qoecnn))
+```
+
+```{python hidden=TRUE}
+
+```
+
+```{python hidden=TRUE}
+from keras.models import load_model
+
+# model = load_model('/home/ndtho8205/Desktop/playground/ml/lstm_qoe/LFOVIA_QoE/model_weights_temp/best_model.hdf5')
+model = load_model("/home/ndtho8205/Documents/Projects/SIT/qoe_lstm/notebooks/model.h5")
+```
+
+```{python hidden=TRUE}
+output = []
+for i in range(55):
+    output.append(model.predict(test.X[:, :, :3].reshape(-1, 4, 3)[i : i + 1])[0, :, 0])
+
+output = np.asarray(output).reshape(-1, 1)
+```
+
+```{python hidden=TRUE}
+
+```
+
+```{python hidden=TRUE}
+test.X.shape
+```
+
+```{python hidden=TRUE}
+220 / 4
+```
+
+```{python hidden=TRUE}
+flops = metrics.FLOPS_keras("/home/ndtho8205/Documents/Projects/SIT/sit_qoe/notebooks/saved_models/traintestsplit_lfovia_0_TV01_1080p30_1_7s.h5")
+flops
+```
+
+```{python hidden=TRUE}
+import keras
+from keras.models import Model, Sequential
+from keras.layers import Convolution1D, AtrousConvolution1D, Flatten, Dense, \
+    Input, Lambda, merge, Activation
+```
+
+```{python hidden=TRUE}
+def wavenetBlock(n_atrous_filters, atrous_filter_size, atrous_rate):
+    def f(input_):
+        residual = input_
+        tanh_out = AtrousConvolution1D(n_atrous_filters, atrous_filter_size,
+                                       atrous_rate=atrous_rate,
+                                       border_mode='same',
+                                       activation='tanh')(input_)
+        sigmoid_out = AtrousConvolution1D(n_atrous_filters, atrous_filter_size,
+                                          atrous_rate=atrous_rate,
+                                          border_mode='same',
+                                          activation='sigmoid')(input_)
+        merged = keras.layers.Multiply()([tanh_out, sigmoid_out])
+        skip_out = Convolution1D(1, 1, activation='relu', border_mode='same')(merged)
+        out = keras.layers.Add()([skip_out, residual])
+        return out, skip_out
+    return f
+```
+
+```{python hidden=TRUE}
+def get_basic_generative_model(input_size):
+    input_ = Input(shape=(input_size, 1))
+    A, B = wavenetBlock(64, 2, 2)(input_)
+    skip_connections = [B]
+    for i in range(20):
+        A, B = wavenetBlock(64, 2, 2**((i+2)%9))(A)
+        skip_connections.append(B)
+    net = keras.layers.Add()(skip_connections)
+    net = Activation('relu')(net)
+    net = Convolution1D(1, 1, activation='relu')(net)
+    net = Convolution1D(1, 1)(net)
+    net = Flatten()(net)
+    net = Dense(input_size, activation='softmax')(net)
+    model = Model(input=input_, output=net)
+    model.compile(loss='categorical_crossentropy', optimizer='sgd',
+                  metrics=['accuracy'])
+    model.summary()
+    return model
+```
+
+```{python hidden=TRUE}
+get_basic_generative_model(3)
+```
+
+```{python hidden=TRUE}
+
+```
